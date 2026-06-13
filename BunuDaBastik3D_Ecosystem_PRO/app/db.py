@@ -135,7 +135,7 @@ SCHEMA = [
 )""",
 """CREATE TABLE IF NOT EXISTS app_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    level TEXT DEFAULT 'INFO', title TEXT NOT NULL, detail TEXT DEFAULT '', created_at TEXT NOT NULL
+    level TEXT DEFAULT 'INFO', title TEXT NOT NULL, detail TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 )""",
 ]
 
@@ -280,7 +280,8 @@ def _ensure_columns(conn):
             'value':'REAL DEFAULT 0', 'active':'INTEGER DEFAULT 1', 'notes':'TEXT DEFAULT ""', 'created_at':'TEXT DEFAULT ""', 'updated_at':'TEXT DEFAULT ""'
         },
         'app_events': {
-            'level':'TEXT DEFAULT "INFO"', 'title':'TEXT DEFAULT ""', 'detail':'TEXT DEFAULT ""', 'created_at':'TEXT DEFAULT ""'
+            'level':'TEXT DEFAULT "INFO"', 'title':'TEXT DEFAULT ""', 'detail':'TEXT DEFAULT ""', 'created_at':'TEXT DEFAULT ""',
+            'updated_at':'TEXT DEFAULT ""'
         }
     }
     for table in SORTABLE_TABLES:

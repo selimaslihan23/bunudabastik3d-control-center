@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -14,6 +15,13 @@ if str(ROOT) not in sys.path:
 from app import db
 
 BRIDGE_DB = Path(os.environ.get('BDB_BRIDGE_DB', db.DB_PATH))
+LOG_DIR = Path(os.environ.get('BDB_LOG_DIR', str(ROOT / 'logs')))
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    filename=str(LOG_DIR / 'app_debug.log'),
+    level=logging.DEBUG,
+    format='%(asctime)s | %(levelname)s | %(message)s'
+)
 # Bridge ve masaüstü aynı DB'yi kullanabilir; deployment'ta BDB_BRIDGE_DB ile ayrı DB verilebilir.
 db.DB_PATH = BRIDGE_DB
 db.init_db(BRIDGE_DB)
@@ -32,6 +40,7 @@ def _headers_ok(request: Request) -> bool:
 def _insert(payload: Dict[str, Any], source_default: str):
     rid = db.import_inbox_item(payload, source_default=source_default)
     db.log_event(f'{source_default} webhook alındı', f'Inbox #{rid}')
+    logging.info('%s webhook inserted inbox_id=%s', source_default, rid)
     return rid
 
 
@@ -99,6 +108,7 @@ def _parse_whatsapp(payload: Dict[str, Any]) -> list[Dict[str, Any]]:
                         'raw_json': msg,
                     })
     except Exception:
+        logging.exception('WhatsApp payload parse failed')
         items.append({'source': 'WhatsApp', 'subject': 'WhatsApp Raw Payload', 'message': json.dumps(payload, ensure_ascii=False), 'raw_json': payload})
     return items
 
@@ -156,6 +166,7 @@ def _parse_instagram(payload: Dict[str, Any]) -> list[Dict[str, Any]]:
                     'raw_json': change,
                 })
     except Exception:
+        logging.exception('Instagram payload parse failed')
         items.append({'source': 'Instagram', 'subject': 'Instagram Raw Payload', 'message': json.dumps(payload, ensure_ascii=False), 'raw_json': payload})
     return items
 

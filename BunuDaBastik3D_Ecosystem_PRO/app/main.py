@@ -22,7 +22,7 @@ else:
     CURRENT_DIR = Path(__file__).resolve().parent
     BASE_DIR = CURRENT_DIR.parent
 ASSETS_DIR = BASE_DIR / 'assets'
-LOG_DIR = Path(os.environ.get('LOCALAPPDATA', str(BASE_DIR))) / 'BunuDaBastik3D' / 'logs'
+LOG_DIR = Path(os.environ.get('BDB_LOG_DIR', str(BASE_DIR / 'logs')))
 try:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
@@ -110,6 +110,7 @@ GLOBAL_RECORD_TABLES = {
     'Stok': {'table': 'inventory', 'key': 'inventory', 'title': 'item', 'detail': 'material', 'status': 'category', 'refresh': 'refresh_inventory'},
     'Müşteriler': {'table': 'customers', 'key': 'customer', 'title': 'name', 'detail': 'phone', 'status': 'source', 'refresh': 'refresh_customers'},
     'Mesajlar': {'table': 'message_templates', 'key': 'template', 'title': 'name', 'detail': 'channel', 'status': 'channel', 'refresh': 'refresh_templates'},
+    'Senkron': {'table': 'sync_queue', 'key': 'sync', 'title': 'entity_type', 'detail': 'entity_id', 'status': 'status', 'refresh': 'refresh_sync'},
     'Maliyet Kalemleri': {'table': 'cost_items', 'key': 'cost', 'title': 'name', 'detail': 'setting_key', 'status': 'group_name', 'refresh': 'refresh_cost_items'},
 }
 
@@ -1105,10 +1106,27 @@ Yerel işler için Gelen Kutusu > Manuel Talep Ekle kullanılır.
         time_raw = fnum(self.vars.get('cat_time').get())
         grams_basis = self.vars.get('cat_grams_basis').get() if self.vars.get('cat_grams_basis') else 'Toplam'
         time_basis = self.vars.get('cat_time_basis').get() if self.vars.get('cat_time_basis') else 'Toplam'
-        total_grams = grams_raw * qty if grams_basis == 'Parça başı' else grams_raw
-        total_support = support_raw * qty if grams_basis == 'Parça başı' else support_raw
-        total_time = time_raw * qty if time_basis == 'Parça başı' else time_raw
+        total_grams, total_support, total_time = self._catalog_totals(qty, grams_raw, support_raw, time_raw, grams_basis, time_basis)
         return qty, grams_raw, support_raw, time_raw, grams_basis, time_basis, total_grams, total_support, total_time
+
+    def _is_piece_basis(self, value):
+        return str(value or '').strip().lower().startswith('par')
+
+    def _catalog_totals(self, qty, grams_raw, support_raw, time_raw, grams_basis, time_basis):
+        qty = max(inum(qty, 1), 1)
+        total_grams = fnum(grams_raw) * qty if self._is_piece_basis(grams_basis) else fnum(grams_raw)
+        total_support = fnum(support_raw) * qty if self._is_piece_basis(grams_basis) else fnum(support_raw)
+        total_time = fnum(time_raw) * qty if self._is_piece_basis(time_basis) else fnum(time_raw)
+        return total_grams, total_support, total_time
+
+    def _catalog_breakdown_for_row(self, row):
+        qty = max(inum(row['quantity'], 1), 1)
+        grams_basis = row['grams_basis'] if 'grams_basis' in row.keys() else 'Toplam'
+        time_basis = row['time_basis'] if 'time_basis' in row.keys() else 'Toplam'
+        total_grams, total_support, total_time = self._catalog_totals(
+            qty, row['grams'], row['support_grams'], row['time_min'], grams_basis, time_basis
+        )
+        return calculate_price(self.settings, row['material'], total_grams, total_support, total_time, 1)
 
     def catalog_preview_price(self):
         qty, grams_raw, support_raw, time_raw, grams_basis, time_basis, total_grams, total_support, total_time = self._catalog_price_inputs()
@@ -1116,7 +1134,7 @@ Yerel işler için Gelen Kutusu > Manuel Talep Ekle kullanılır.
         cur = self.settings.get('currency','TL')
         unit_price = br['total_price'] / qty if qty else br['total_price']
         warning = ''
-        if qty > 1 and (grams_basis == 'Parça başı' or time_basis == 'Parça başı') and (total_grams > 5000 or total_time > 3000):
+        if qty > 1 and (self._is_piece_basis(grams_basis) or self._is_piece_basis(time_basis)) and (total_grams > 5000 or total_time > 3000):
             warning = '  ⚠ Değer çok büyüdü; MakerWorld/Bambu verisi toplam ise Gram/Süre tipini Toplam seç.'
         self.cat_result.configure(text=f"Toplam {fmt_money(br['total_price'], cur)} | Birim {fmt_money(unit_price, cur)} | {total_grams:g} g, {total_time:g} dk | Mod: gram={grams_basis}, süre={time_basis}{warning}")
         return br
@@ -1452,6 +1470,7 @@ Yerel işler için Gelen Kutusu > Manuel Talep Ekle kullanılır.
         for key, name, group_name, unit in operation_items:
             self._upsert_cost_setting(key, name, group_name, unit, self.raw_price_vars[key].get(), 'Fiyat merkezi üzerinden güncellendi')
         self.apply_raw_prices_to_inventory(silent=True)
+        updated = self.recalculate_saved_prices()
         if hasattr(self, 'setting_vars'):
             for k, v in self.raw_price_vars.items():
                 if k in self.setting_vars:
@@ -1459,7 +1478,41 @@ Yerel işler için Gelen Kutusu > Manuel Talep Ekle kullanılır.
         self.refresh_raw_material_center()
         self.refresh_cost_items()
         self.set_status('Hammadde fiyatları tüm fiyatlama motoruna işlendi')
-        messagebox.showinfo('Hammadde Fiyat Merkezi', 'Fiyatlar kaydedildi. Teklif/katalog hesapları yeni maliyetleri kullanacak.')
+        messagebox.showinfo('Hammadde Fiyat Merkezi', f'Fiyatlar kaydedildi. {updated} kayıt yeni maliyetlerle yeniden hesaplandı.')
+
+    def recalculate_saved_prices(self):
+        updated = 0
+        for r in db.list_rows('catalog', order='id ASC', limit=10000):
+            br = self._catalog_breakdown_for_row(r)
+            db.update('catalog', r['id'], {
+                'estimated_price': br['total_price'],
+                'cost_estimate': br['cost_estimate'],
+                'margin_amount': br['margin_amount'],
+            })
+            updated += 1
+        for table in ('quotes', 'orders'):
+            for r in db.list_rows(table, order='id ASC', limit=10000):
+                br = calculate_price(
+                    self.settings,
+                    r['material'],
+                    r['grams'],
+                    r['support_grams'],
+                    r['time_min'],
+                    r['quantity'],
+                    r['design_minutes'] if table == 'quotes' and 'design_minutes' in r.keys() else 0,
+                )
+                data = {'price': br['total_price'], 'cost_estimate': br['cost_estimate']}
+                if 'margin_amount' in r.keys():
+                    data['margin_amount'] = br['margin_amount']
+                db.update(table, r['id'], data)
+                updated += 1
+        for refresh in (self.refresh_catalog, self.refresh_quotes, self.refresh_orders):
+            try:
+                refresh()
+            except Exception:
+                logging.exception('Saved price refresh failed')
+        db.log_event('Fiyatlar yeniden hesaplandı', f'{updated} katalog/teklif/sipariş kaydı güncellendi')
+        return updated
 
     def apply_raw_prices_to_inventory(self, silent=False):
         material_to_key = {'PLA':'pla_cost_kg','PETG':'petg_cost_kg','ABS':'abs_cost_kg','ASA':'asa_cost_kg','TPU':'tpu_cost_kg','SUPPORT':'support_cost_kg'}
@@ -1941,6 +1994,21 @@ Notlar:
     def _bridge_base_url(self):
         return self.vars.get('bridge_url', tk.StringVar(value=self.settings.get('bridge_url','http://127.0.0.1:8787'))).get().rstrip('/')
 
+    def _bridge_port(self):
+        port = self.vars.get('bridge_port', tk.StringVar(value=self.settings.get('bridge_port', '8787'))).get()
+        return str(max(inum(port, 8787), 1))
+
+    def _bridge_env(self):
+        env = os.environ.copy()
+        env['BDB_BRIDGE_DB'] = str(db.DB_PATH)
+        env['BDB_BRIDGE_PORT'] = self._bridge_port()
+        env['PORT'] = self._bridge_port()
+        secret = self.vars.get('webhook_secret', tk.StringVar(value=self.settings.get('webhook_secret', ''))).get()
+        verify = self.vars.get('meta_verify_token', tk.StringVar(value=self.settings.get('meta_verify_token', 'bunudabastik3d_verify'))).get()
+        env['BDB_WEBHOOK_SECRET'] = secret
+        env['WHATSAPP_VERIFY_TOKEN'] = verify
+        return env
+
     def _bridge_health_ok(self):
         import requests
         try:
@@ -1976,16 +2044,25 @@ Notlar:
                 self.refresh_integration_status_cards()
                 return
             bat = BASE_DIR / 'run_bridge_windows.bat'
+            env = self._bridge_env()
             if bat.exists():
-                self.bridge_process = subprocess.Popen(str(bat), cwd=str(BASE_DIR), shell=True)
+                self.bridge_process = subprocess.Popen(str(bat), cwd=str(BASE_DIR), shell=True, env=env)
             else:
-                cmd = [sys.executable, '-m', 'uvicorn', 'cloud_bridge.main:app', '--host', '127.0.0.1', '--port', '8787']
-                self.bridge_process = subprocess.Popen(cmd, cwd=str(BASE_DIR))
+                cmd = [sys.executable, '-m', 'uvicorn', 'cloud_bridge.main:app', '--host', '127.0.0.1', '--port', self._bridge_port()]
+                self.bridge_process = subprocess.Popen(cmd, cwd=str(BASE_DIR), env=env)
             db.log_event('Bridge başlatıldı', 'Uygulama içinden başlatma denendi')
             self.after(2500, self.refresh_integration_status_cards)
             self.set_status('Cloud Bridge başlatılıyor...')
         except Exception as e:
             messagebox.showerror('Bridge başlatılamadı', str(e))
+
+    def _terminate_bridge_on_port(self):
+        if not sys.platform.startswith('win'):
+            return False
+        port = self._bridge_port()
+        cmd = f'for /f "tokens=5" %a in (\'netstat -ano ^| findstr :{port}\') do taskkill /PID %a /T /F'
+        result = subprocess.run(cmd, shell=True, cwd=str(BASE_DIR), capture_output=True, text=True)
+        return result.returncode == 0
 
     def stop_bridge(self):
         try:
@@ -1993,6 +2070,9 @@ Notlar:
                 self.bridge_process.terminate()
                 self.bridge_process = None
                 db.log_event('Bridge durduruldu', 'Uygulama içinden durduruldu')
+                self.set_status('Bridge durduruldu')
+            elif self._terminate_bridge_on_port():
+                db.log_event('Bridge durduruldu', f'Port {self._bridge_port()} üzerindeki süreç kapatıldı')
                 self.set_status('Bridge durduruldu')
             else:
                 messagebox.showinfo('Bridge', 'Bu oturumdan başlatılan Bridge süreci bulunamadı. Ayrı açılan CMD penceresini kapatman gerekebilir.')
