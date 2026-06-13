@@ -1,0 +1,46 @@
+{
+  "google_forms_example": {
+    "Ad Soyad": "Ahmet Yılmaz",
+    "Telefon": "+905551112233",
+    "E-posta": "ahmet@example.com",
+    "Ürün / Proje Adı": "Telefon standı",
+    "Açıklama": "Siyah PLA istiyorum, 2 adet.",
+    "Malzeme": "PLA",
+    "Renk": "Siyah",
+    "Adet": 2,
+    "Gram": 80,
+    "Baskı Süresi Dakika": 180
+  },
+  "manual_example": {
+    "source": "Web",
+    "customer_name": "Zeynep Kaya",
+    "phone": "+905559998877",
+    "subject": "Maket parça baskısı",
+    "message": "PETG ile dayanıklı olsun.",
+    "material": "PETG",
+    "quantity": 1,
+    "grams": 120,
+    "time_min": 260
+  }
+}
+
+
+Instagram DM test payload örneği:
+POST http://127.0.0.1:8787/webhook/instagram
+{
+  "object": "instagram",
+  "entry": [
+    {
+      "id": "PAGE_OR_IG_ID",
+      "time": 1781111111,
+      "messaging": [
+        {
+          "sender": {"id": "IG_USER_ID"},
+          "recipient": {"id": "IG_BUSINESS_ID"},
+          "timestamp": 1781111111,
+          "message": {"mid": "m_test_1", "text": "Merhaba, 3D baskı teklifi almak istiyorum."}
+        }
+      ]
+    }
+  ]
+}
